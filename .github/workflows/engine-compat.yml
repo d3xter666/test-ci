@@ -32,12 +32,12 @@ jobs:
       run: |
         npm ci --dry-run 2>&1 | tee /tmp/npm-output.txt
         VER=$(node --version)
-        # Extract incompatible package names from EBADENGINE warnings
-        PKGS=$(grep -oP "EBADENGINE.*package: '\K[^']+" /tmp/npm-output.txt | sort -u | paste -sd ', ' || true)
+        # Extract "pkg (node range)" pairs from EBADENGINE warnings
+        PKGS=$(awk -F"'" '/EBADENGINE.*package:/{pkg=$2} /EBADENGINE.*node:/{if(pkg){print pkg" (node "$2")"; pkg=""}}' /tmp/npm-output.txt | sort -u | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g' || true)
         if [ -n "$PKGS" ]; then
-          echo "$VER|fail|$PKGS" > /tmp/result.txt
+          printf '%s\t%s\t%s\n' "$VER" "fail" "$PKGS" > /tmp/result.txt
         else
-          echo "$VER|pass|" > /tmp/result.txt
+          printf '%s\t%s\t\n' "$VER" "pass" > /tmp/result.txt
         fi
 
     - uses: actions/upload-artifact@v4
@@ -71,12 +71,13 @@ jobs:
 
         for f in results/engine-*/result.txt; do
           [ -f "$f" ] || continue
-          IFS='|' read -r VER STATUS PKGS < "$f"
+          IFS=$'\t' read -r VER STATUS PKGS < "$f"
           if [ "$STATUS" = "pass" ]; then
             TABLE="$TABLE\n| $VER | ✅ Pass | — |"
           else
             FAILED=true
-            TABLE="$TABLE\n| $VER | ❌ Fail | $PKGS |"
+            SAFE_PKGS=$(echo "$PKGS" | sed 's/|/\\|/g')
+            TABLE="$TABLE\n| $VER | ❌ Fail | $SAFE_PKGS |"
           fi
         done
 
