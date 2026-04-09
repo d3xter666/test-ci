@@ -33,12 +33,18 @@ jobs:
 
     - name: npm ci --engine-strict --dry-run
       run: |
+        set -o pipefail
         mkdir -p /tmp/engine-result
         node --version | tr -d '\n' > /tmp/engine-result/version.txt
         if npm ci --engine-strict --dry-run 2>&1 | tee /tmp/engine-result/output.txt; then
           echo pass > /tmp/engine-result/status.txt
         else
           echo fail > /tmp/engine-result/status.txt
+          # Extract "pkg@ver (requires node X)" — one per line
+          awk '
+            /Not compatible.*: / { sub(/.*: /, ""); pkg=$0 }
+            /Required:/ && pkg { sub(/.*Required: /, ""); print pkg " → " $0; pkg="" }
+          ' /tmp/engine-result/output.txt | sort -u > /tmp/engine-result/packages.txt || true
           grep -A3 'EBADENGINE\|notsup\|Required:\|Actual:\|Not compatible' /tmp/engine-result/output.txt \
             | head -40 > /tmp/engine-result/errors.txt || true
         fi
@@ -75,8 +81,8 @@ jobs:
           echo "$MARKER"
           echo "## ENGINE_ICON Engine Compatibility"
           echo ""
-          echo "| Node | Result |"
-          echo "|---|---|"
+          echo "| Node | Result | Incompatible Packages |"
+          echo "|---|---|---|"
         } > /tmp/table.md
         : > /tmp/details.md
 
@@ -85,10 +91,15 @@ jobs:
           VER=$(cat "$dir/version.txt")
           STATUS=$(cat "$dir/status.txt" 2>/dev/null || echo unknown)
           if [ "$STATUS" = pass ]; then
-            echo "| $VER | ✅ Pass |" >> /tmp/table.md
+            echo "| $VER | ✅ Pass | — |" >> /tmp/table.md
           else
             FAILED=true
-            echo "| $VER | ❌ Fail |" >> /tmp/table.md
+            PKGS="—"
+            if [ -s "$dir/packages.txt" ]; then
+              # Format as comma-separated inline code: `pkg@ver (engines)`, ...
+              PKGS=$(awk '{printf "`%s` ", $0}' "$dir/packages.txt" | sed 's/ $//')
+            fi
+            echo "| $VER | ❌ Fail | $PKGS |" >> /tmp/table.md
             if [ -s "$dir/errors.txt" ]; then
               printf '<details><summary>%s</summary>\n\n```\n' "$VER" >> /tmp/details.md
               cat "$dir/errors.txt" >> /tmp/details.md
