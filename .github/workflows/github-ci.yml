@@ -103,7 +103,7 @@ jobs:
             FAILED=true
             PKGS="—"
             if [ -s "$dir/packages.txt" ]; then
-              PKGS=$(sed 's/.*/`&`/' "$dir/packages.txt" | tr '\n' ' ' | sed 's/ $//')
+              PKGS=$(sed 's/|/\\|/g; s/.*/`&`/' "$dir/packages.txt" | tr '\n' ' ' | sed 's/ $//')
             fi
             echo "| $VER | ❌ Fail | $PKGS |" >> /tmp/table.md
           fi
