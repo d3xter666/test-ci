@@ -1,0 +1,99 @@
+name: Node Packages Engine Compatibility Check
+
+on:
+  workflow_call:
+    inputs:
+      node-versions:
+        description: 'JSON array of Node.js versions, e.g. ["22.20.0","22","24"]'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  check:
+    name: Node ${{ matrix.node-version }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ${{ fromJSON(inputs.node-versions) }}
+    steps:
+
+    - uses: actions/checkout@v6
+
+    - uses: actions/setup-node@v6
+      with:
+        node-version: ${{ matrix.node-version }}
+
+    - name: Check engine compatibility
+      run: |
+        npm ci --dry-run 2>&1 | tee /tmp/npm-output.txt
+        VER=$(node --version)
+        # Extract incompatible package names from EBADENGINE warnings
+        PKGS=$(grep -oP "EBADENGINE.*package: '\K[^']+" /tmp/npm-output.txt | sort -u | paste -sd ', ' || true)
+        if [ -n "$PKGS" ]; then
+          echo "$VER|fail|$PKGS" > /tmp/result.txt
+        else
+          echo "$VER|pass|" > /tmp/result.txt
+        fi
+
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: engine-${{ matrix.node-version }}
+        path: /tmp/result.txt
+
+  report:
+    name: Engine report
+    needs: check
+    runs-on: ubuntu-24.04
+    if: always()
+    steps:
+
+    - uses: actions/checkout@v6
+
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: engine-*
+        path: results/
+
+    - name: Post PR comment
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        PR="${{ github.event.pull_request.number }}"
+        MARKER="<!-- engine-compat -->"
+        FAILED=false
+        TABLE="| Node | Result | Incompatible Packages |\n|---|---|---|"
+
+        for f in results/engine-*/result.txt; do
+          [ -f "$f" ] || continue
+          IFS='|' read -r VER STATUS PKGS < "$f"
+          if [ "$STATUS" = "pass" ]; then
+            TABLE="$TABLE\n| $VER | ✅ Pass | — |"
+          else
+            FAILED=true
+            TABLE="$TABLE\n| $VER | ❌ Fail | $PKGS |"
+          fi
+        done
+
+        if [ "$FAILED" = true ]; then ICON="❌"; else ICON="✅"; fi
+        printf '%s\n## %s Engine Compatibility\n\n%b\n' "$MARKER" "$ICON" "$TABLE" > /tmp/comment.md
+
+        OLD=$(gh api "repos/${{ github.repository }}/issues/${PR}/comments" \
+          --jq "[.[] | select(.body | contains(\"$MARKER\"))][0].id" 2>/dev/null || true)
+        if [ -n "$OLD" ] && [ "$OLD" != "null" ]; then
+          gh api --method PATCH "repos/${{ github.repository }}/issues/comments/$OLD" -F body=@/tmp/comment.md
+        else
+          gh pr comment "$PR" --body-file /tmp/comment.md
+        fi
+
+        if [ "$FAILED" = true ]; then
+          gh label create blocked --color D93F0B 2>/dev/null || true
+          gh pr edit "$PR" --add-label blocked
+        else
+          gh pr edit "$PR" --remove-label blocked 2>/dev/null || true
+        fi
