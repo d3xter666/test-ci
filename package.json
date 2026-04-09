@@ -1,0 +1,23 @@
+{
+	"name": "engine-compat-test",
+	"version": "1.0.0",
+	"type": "module",
+	"engines": {
+		"node": "^22.20.0 || >=24.0.0",
+		"npm": ">= 8"
+	},
+	"dependencies": {
+		"chalk": "^5.3.0",
+		"fake-compatible-dep": "file:fake-compatible-dep",
+		"fake-old-dep": "file:fake-old-dep",
+		"fake-restricted-dep": "file:fake-restricted-dep",
+		"glob": "^10.3.0",
+		"minimatch": "^9.0.0",
+		"semver": "^7.6.0"
+	},
+	"devDependencies": {
+		"check-engine": "^1.14.0",
+		"check-engine-light": "^0.4.0",
+		"ls-engines": "^0.10.0"
+	}
+}
