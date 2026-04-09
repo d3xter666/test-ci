@@ -33,37 +33,84 @@ jobs:
 
     - name: npm ci --engine-strict --dry-run
       run: |
-        set -o pipefail
-        npm ci --engine-strict --dry-run 2>&1 | tee /tmp/npm-output.txt
+        mkdir -p /tmp/engine-result
+        node --version | tr -d '\n' > /tmp/engine-result/version.txt
+        if npm ci --engine-strict --dry-run 2>&1 | tee /tmp/engine-result/output.txt; then
+          echo pass > /tmp/engine-result/status.txt
+        else
+          echo fail > /tmp/engine-result/status.txt
+          grep -A3 'EBADENGINE\|notsup\|Required:\|Actual:\|Not compatible' /tmp/engine-result/output.txt \
+            | head -40 > /tmp/engine-result/errors.txt || true
+        fi
 
-    - name: Comment and label on failure
-      if: failure()
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: engine-${{ matrix.node-version }}
+        path: /tmp/engine-result/
+
+  engine-report:
+    name: Engine report
+    needs: engine-compat
+    runs-on: ubuntu-24.04
+    if: always() && github.event_name == 'pull_request'
+    steps:
+
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: engine-*
+        path: results/
+
+    - name: Build and post comment
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         PR="${{ github.event.pull_request.number }}"
-        NODE_VER=$(node --version)
-        MARKER="<!-- engine-compat ${{ matrix.node-version }} -->"
+        MARKER="<!-- engine-compat -->"
+        FAILED=false
 
         {
-          echo "${MARKER}"
-          echo "## ❌ Engine incompatibility — Node ${NODE_VER}"
+          echo "$MARKER"
+          echo "## ENGINE_ICON Engine Compatibility"
           echo ""
-          echo '```'
-          tail -30 /tmp/npm-output.txt
-          echo '```'
-        } > /tmp/comment.md
+          echo "| Node | Result |"
+          echo "|---|---|"
+        } > /tmp/table.md
+        : > /tmp/details.md
 
-        # Update existing comment for this node version, or create new one
+        for dir in results/engine-*/; do
+          [ -d "$dir" ] || continue
+          VER=$(cat "$dir/version.txt")
+          STATUS=$(cat "$dir/status.txt" 2>/dev/null || echo unknown)
+          if [ "$STATUS" = pass ]; then
+            echo "| $VER | ✅ Pass |" >> /tmp/table.md
+          else
+            FAILED=true
+            echo "| $VER | ❌ Fail |" >> /tmp/table.md
+            if [ -s "$dir/errors.txt" ]; then
+              printf '<details><summary>%s</summary>\n\n```\n' "$VER" >> /tmp/details.md
+              cat "$dir/errors.txt" >> /tmp/details.md
+              printf '\n```\n\n</details>\n\n' >> /tmp/details.md
+            fi
+          fi
+        done
+
+        if [ "$FAILED" = true ]; then ICON="❌"; else ICON="✅"; fi
+        sed -i "s/ENGINE_ICON/$ICON/" /tmp/table.md
+
+        cat /tmp/table.md /tmp/details.md > /tmp/comment.md
+
         OLD=$(gh api "repos/${{ github.repository }}/issues/${PR}/comments" \
-          --jq "[.[] | select(.body | contains(\"${MARKER}\"))][0].id" 2>/dev/null || true)
-
+          --jq "[.[] | select(.body | contains(\"$MARKER\"))][0].id" 2>/dev/null || true)
         if [ -n "$OLD" ] && [ "$OLD" != "null" ]; then
-          gh api --method PATCH "repos/${{ github.repository }}/issues/comments/${OLD}" \
-            -F body=@/tmp/comment.md
+          gh api --method PATCH "repos/${{ github.repository }}/issues/comments/$OLD" -F body=@/tmp/comment.md
         else
-          gh pr comment "${PR}" --body-file /tmp/comment.md
+          gh pr comment "$PR" --body-file /tmp/comment.md
         fi
 
-        gh label create "blocked" --color "D93F0B" 2>/dev/null || true
-        gh pr edit "${PR}" --add-label "blocked"
+        if [ "$FAILED" = true ]; then
+          gh label create blocked --color D93F0B 2>/dev/null || true
+          gh pr edit "$PR" --add-label blocked
+        else
+          gh pr edit "$PR" --remove-label blocked 2>/dev/null || true
+        fi
