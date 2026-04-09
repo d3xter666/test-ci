@@ -31,22 +31,20 @@ jobs:
       with:
         node-version: ${{ matrix.node-version }}
 
-    - name: npm ci --engine-strict --dry-run
+    - name: Check engine compatibility
       run: |
-        set -o pipefail
         mkdir -p /tmp/engine-result
         node --version | tr -d '\n' > /tmp/engine-result/version.txt
-        if npm ci --engine-strict --dry-run 2>&1 | tee /tmp/engine-result/output.txt; then
-          echo pass > /tmp/engine-result/status.txt
-        else
+        npm ci --dry-run 2>&1 | tee /tmp/engine-result/output.txt
+        # Extract unique "package → required" pairs from EBADENGINE warnings
+        awk "
+          /EBADENGINE.*package:/ { gsub(/[',]/, \"\"); pkg=\$NF }
+          /EBADENGINE.*required:/ && pkg { sub(/.*required: /, \"\"); print pkg \" → \" \$0; pkg=\"\" }
+        " /tmp/engine-result/output.txt | sort -u > /tmp/engine-result/packages.txt
+        if [ -s /tmp/engine-result/packages.txt ]; then
           echo fail > /tmp/engine-result/status.txt
-          # Extract "pkg@ver (requires node X)" — one per line
-          awk '
-            /Not compatible.*: / { sub(/.*: /, ""); pkg=$0 }
-            /Required:/ && pkg { sub(/.*Required: /, ""); print pkg " → " $0; pkg="" }
-          ' /tmp/engine-result/output.txt | sort -u > /tmp/engine-result/packages.txt || true
-          grep -A3 'EBADENGINE\|notsup\|Required:\|Actual:\|Not compatible' /tmp/engine-result/output.txt \
-            | head -40 > /tmp/engine-result/errors.txt || true
+        else
+          echo pass > /tmp/engine-result/status.txt
         fi
 
     - uses: actions/upload-artifact@v4
@@ -84,7 +82,6 @@ jobs:
           echo "| Node | Result | Incompatible Packages |"
           echo "|---|---|---|"
         } > /tmp/table.md
-        : > /tmp/details.md
 
         for dir in results/engine-*/; do
           [ -d "$dir" ] || continue
@@ -96,22 +93,16 @@ jobs:
             FAILED=true
             PKGS="—"
             if [ -s "$dir/packages.txt" ]; then
-              # Format as comma-separated inline code: `pkg@ver (engines)`, ...
               PKGS=$(awk '{printf "`%s` ", $0}' "$dir/packages.txt" | sed 's/ $//')
             fi
             echo "| $VER | ❌ Fail | $PKGS |" >> /tmp/table.md
-            if [ -s "$dir/errors.txt" ]; then
-              printf '<details><summary>%s</summary>\n\n```\n' "$VER" >> /tmp/details.md
-              cat "$dir/errors.txt" >> /tmp/details.md
-              printf '\n```\n\n</details>\n\n' >> /tmp/details.md
-            fi
           fi
         done
 
         if [ "$FAILED" = true ]; then ICON="❌"; else ICON="✅"; fi
         sed -i "s/ENGINE_ICON/$ICON/" /tmp/table.md
 
-        cat /tmp/table.md /tmp/details.md > /tmp/comment.md
+        cp /tmp/table.md /tmp/comment.md
 
         OLD=$(gh api "repos/${{ github.repository }}/issues/${PR}/comments" \
           --jq "[.[] | select(.body | contains(\"$MARKER\"))][0].id" 2>/dev/null || true)
