@@ -17,4 +17,4 @@ jobs:
     if: github.event_name == 'pull_request'
     uses: ./.github/workflows/engine-compat.yml
     with:
-      node-versions: '["22.20.0", "22", "24.0.0", "24"]'
+      node-versions: '22.20.0, 22, 24.0.0, 24'

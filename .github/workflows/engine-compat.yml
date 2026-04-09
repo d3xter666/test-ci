@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       node-versions:
-        description: 'JSON array of Node.js versions, e.g. ["22.20.0","22","24"]'
+        description: 'Comma-separated Node.js versions, e.g. 22.20.0, 22, 24.0.0, 24'
         required: true
         type: string
 
@@ -13,71 +13,42 @@ permissions:
   pull-requests: write
 
 jobs:
-  check:
-    name: Node ${{ matrix.node-version }}
+  engine-compat:
+    name: Engine compatibility
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: ${{ fromJSON(inputs.node-versions) }}
     steps:
 
     - uses: actions/checkout@v6
 
-    - uses: actions/setup-node@v6
-      with:
-        node-version: ${{ matrix.node-version }}
-
-    - name: Check engine compatibility
-      run: |
-        npm ci --dry-run 2>&1 | tee /tmp/npm-output.txt
-        VER=$(node --version)
-        # Extract "pkg (node range)" pairs from EBADENGINE warnings
-        PKGS=$(awk -F"'" '/EBADENGINE.*package:/{pkg=$2} /EBADENGINE.*node:/{if(pkg){print pkg" (node "$2")"; pkg=""}}' /tmp/npm-output.txt | sort -u | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g' || true)
-        if [ -n "$PKGS" ]; then
-          printf '%s\t%s\t%s\n' "$VER" "fail" "$PKGS" > /tmp/result.txt
-        else
-          printf '%s\t%s\t\n' "$VER" "pass" > /tmp/result.txt
-        fi
-
-    - uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: engine-${{ matrix.node-version }}
-        path: /tmp/result.txt
-
-  report:
-    name: Engine report
-    needs: check
-    runs-on: ubuntu-24.04
-    if: always()
-    steps:
-
-    - uses: actions/checkout@v6
-
-    - uses: actions/download-artifact@v4
-      with:
-        pattern: engine-*
-        path: results/
-
-    - name: Post PR comment
+    - name: Check engines and report
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        NODE_VERSIONS: ${{ inputs.node-versions }}
       run: |
+        export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh"
+
         PR="${{ github.event.pull_request.number }}"
         MARKER="<!-- engine-compat -->"
         FAILED=false
         TABLE="| Node | Result | Incompatible Packages |\n|---|---|---|"
 
-        for f in results/engine-*/result.txt; do
-          [ -f "$f" ] || continue
-          IFS=$'\t' read -r VER STATUS PKGS < "$f"
-          if [ "$STATUS" = "pass" ]; then
-            TABLE="$TABLE\n| $VER | ✅ Pass | — |"
-          else
+        IFS=',' read -ra VERSIONS <<< "$NODE_VERSIONS"
+        for V in "${VERSIONS[@]}"; do
+          V=$(echo "$V" | xargs)  # trim whitespace
+          nvm install "$V" --no-progress > /dev/null 2>&1
+          nvm use "$V" > /dev/null 2>&1
+          VER=$(node --version)
+
+          PKGS=$(npm ci --dry-run 2>&1 \
+            | awk -F"'" '/EBADENGINE.*package:/{pkg=$2} /EBADENGINE.*node:/{if(pkg){print pkg" (node "$2")"; pkg=""}}' \
+            | sort -u | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
+
+          if [ -n "$PKGS" ]; then
             FAILED=true
-            SAFE_PKGS=$(echo "$PKGS" | sed 's/|/\\|/g')
-            TABLE="$TABLE\n| $VER | ❌ Fail | $SAFE_PKGS |"
+            SAFE=$(echo "$PKGS" | sed 's/|/\\|/g')
+            TABLE="$TABLE\n| $VER | ❌ Fail | $SAFE |"
+          else
+            TABLE="$TABLE\n| $VER | ✅ Pass | — |"
           fi
         done
 
