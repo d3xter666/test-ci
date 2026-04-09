@@ -38,14 +38,16 @@ jobs:
         npm ci --dry-run 2>&1 | tee /tmp/engine-result/output.txt
         # Extract unique "package (node requirement)" pairs from EBADENGINE warnings
         awk "
-          /EBADENGINE.*package:/ { gsub(/[' ,]/, \"\"); pkg=\$NF }
+          /EBADENGINE.*package:/ {
+            match(\$0, /'[^']*'/)
+            pkg = substr(\$0, RSTART+1, RLENGTH-2)
+          }
           /EBADENGINE.*required:.*node:/ && pkg {
             match(\$0, /node: *'[^']*'/)
-            if (RSTART) {
-              req = substr(\$0, RSTART+6, RLENGTH-7)
-              gsub(/'/, \"\", req)
-              print pkg \" (node \" req \")\"
-            }
+            req = substr(\$0, RSTART+6, RLENGTH-6)
+            gsub(/'/, \"\", req)
+            sub(/^ +/, \"\", req)
+            print pkg \" (node \" req \")\"
             pkg=\"\"
           }
         " /tmp/engine-result/output.txt | sort -u > /tmp/engine-result/packages.txt
