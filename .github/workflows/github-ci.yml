@@ -15,6 +15,6 @@ permissions:
 jobs:
   engine-compat:
     if: github.event_name == 'pull_request'
-    uses: ./.github/workflows/engine-compat.yml
+    uses: UI5/cli/.github/workflows/engine-compat.yml@engine-compatibility-checks
     with:
       node-versions: '22.20.0, 22, 24.0.0, 24'
