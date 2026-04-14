@@ -14,56 +14,11 @@ permissions:
 
 jobs:
   engine-compat:
-    name: Engines / Node ${{ matrix.node-version }}
-    runs-on: ubuntu-24.04
     if: github.event_name == 'pull_request'
-    strategy:
-      fail-fast: false
-      matrix:
-        # Border versions of the supported engine range
-        node-version: ["22.20.0", "22", "24.0.0", "24"]
-    steps:
+    uses: UI5/cli/.github/workflows/engine-compat.yml@engine-compatibility-checks
+    with:
+      node-versions: 18, 19, 22.20.0, 22
 
-    - uses: actions/checkout@v6
-
-    - name: Setup Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v6
-      with:
-        node-version: ${{ matrix.node-version }}
-
-    - name: npm ci --engine-strict --dry-run
-      run: |
-        set -o pipefail
-        npm ci --engine-strict --dry-run 2>&1 | tee /tmp/npm-output.txt
-
-    - name: Comment and label on failure
-      if: failure()
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        PR="${{ github.event.pull_request.number }}"
-        NODE_VER=$(node --version)
-        MARKER="<!-- engine-compat ${{ matrix.node-version }} -->"
-
-        {
-          echo "${MARKER}"
-          echo "## ❌ Engine incompatibility — Node ${NODE_VER}"
-          echo ""
-          echo '```'
-          tail -30 /tmp/npm-output.txt
-          echo '```'
-        } > /tmp/comment.md
-
-        # Update existing comment for this node version, or create new one
-        OLD=$(gh api "repos/${{ github.repository }}/issues/${PR}/comments" \
-          --jq "[.[] | select(.body | contains(\"${MARKER}\"))][0].id" 2>/dev/null || true)
-
-        if [ -n "$OLD" ] && [ "$OLD" != "null" ]; then
-          gh api --method PATCH "repos/${{ github.repository }}/issues/comments/${OLD}" \
-            -F body=@/tmp/comment.md
-        else
-          gh pr comment "${PR}" --body-file /tmp/comment.md
-        fi
-
-        gh label create "blocked" --color "D93F0B" 2>/dev/null || true
-        gh pr edit "${PR}" --add-label "blocked"
+  engine-compat-own:
+    if: github.event_name == 'pull_request'
+    uses: UI5/cli/.github/workflows/engine-compat.yml@engine-compatibility-checks-script
