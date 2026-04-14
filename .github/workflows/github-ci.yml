@@ -18,3 +18,11 @@ jobs:
     uses: UI5/cli/.github/workflows/engine-compat.yml@engine-compatibility-checks
     with:
       node-versions: 18, 19, 22.20.0, 22
+
+  engine-compat-cel:
+    if: github.event_name == 'pull_request'
+    uses: UI5/cli/.github/workflows/engine-compat2.yml@engine-compatibility-checks-script
+
+  engine-compat-own:
+    if: github.event_name == 'pull_request'
+    uses: UI5/cli/.github/workflows/engine-compat.yml@engine-compatibility-checks-script
